@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Let's play a troll game - Fixed Physics</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0c0c12; font-family: 'Courier New', Courier, monospace; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        #hud {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: #ff3333; font-size: 26px; font-weight: bold; text-shadow: 2px 2px 5px #000;
+            pointer-events: none; z-index: 10; text-align: center;
+        }
+        .subtitle { font-size: 14px; color: #bbb; margin-top: 5px; }
+
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 100;
+        }
+        #gameover-screen { background: rgba(40, 10, 10, 0.85); }
+        #victory-screen { background: rgba(10, 40, 10, 0.9); }
+        .title { font-size: 50px; font-weight: bold; color: white; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <span id="level-title">NIVEL 1</span>
+        <div class="subtitle" id="level-troll-type">Cargando...</div>
+    </div>
+    
+    <div id="gameover-screen" class="screen">
+        <div class="title" style="color: #ff3333;">¡TROLLIADO! 😈</div>
+        <div style="color: white; margin-top: 10px;">Presiona ESPACIO para reiniciar este nivel</div>
+    </div>
+
+    <div id="victory-screen" class="screen">
+        <div class="title" style="color: #55ff55;">¡DIOS DEL TROLL!</div>
+        <div style="color: white; margin-top: 10px;">Pasaste los 100 niveles de "Let's play a troll game"</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // 1. ESCENA
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+        scene.add(ambientLight);
+
+        camera.position.set(10, 5, 13);
+
+        // 2. JUGADOR
+        let player = { mesh: null, x: 2, y: 4, vx: 0, vy: 0, w: 0.8, h: 0.8, grounded: false };
+        const gravity = -0.016;
+        const jumpForce = 0.32;
+        const speed = 0.13;
+        
+        let currentLevel = 1;
+        const maxLevels = 100;
+        let isGameOver = false;
+
+        const pGeo = new THREE.BoxGeometry(player.w, player.h, 0.8);
+        const pMat = new THREE.MeshStandardMaterial({ color: 0x00aaff, roughness: 0.2 });
+        player.mesh = new THREE.Mesh(pGeo, pMat);
+        scene.add(player.mesh);
+
+        let platforms = [];
+        let spikes = [];
+        let doorMesh = null;
+
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x3a3a4a });
+        const movingWallMat = new THREE.MeshStandardMaterial({ color: 0x6e5a8a });
+        const spikeMat = new THREE.MeshStandardMaterial({ color: 0xff2222 });
+
+        const dGeo = new THREE.BoxGeometry(0.8, 1.6, 0.8);
+        const dMat = new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 0.3 });
+        doorMesh = new THREE.Mesh(dGeo, dMat);
+        scene.add(doorMesh);
+
+        function seededRandom(seed) {
+            let x = Math.sin(seed) * 10000;
+            return x - Math.floor(x);
+        }
+
+        // 3. GENERADOR PROCEDIMENTAL
+        function buildLevel(lvl) {
+            platforms.forEach(p => scene.remove(p.mesh));
+            spikes.forEach(s => scene.remove(s.mesh));
+            platforms = [];
+            spikes = [];
+
+            document.getElementById('level-title').innerText = "NIVEL " + lvl;
+
+            // Bloque inicial estable
+            createBlock(0, 2, 5, 4, false);
+
+            if (lvl === 1) {
+                document.getElementById('level-troll-type').innerText = "Trampa: El foso clásico";
+                createBlock(8, 2, 4, 4, false);
+                createSpike(6.5, 0.5, 2, 1, true); 
+                createBlock(15, 2, 5, 4, false);
+                doorMesh.position.set(18, 2.8, 0);
+            } 
+            else if (lvl === 2) {
+                document.getElementById('level-troll-type').innerText = "Trampa: El bloque móvil horizontal";
+                createBlock(8, 2, 3, 4, false, false, true); 
+                createBlock(14, 2, 5, 4, false);
+                doorMesh.position.set(17, 2.8, 0);
+            }
+            else {
+                document.getElementById('level-troll-type').innerText = "Trampa: Caos Procedimental Activo 🎲";
+                let currentX = 5;
+                let seedCounter = lvl * 7; 
+                let totalIslands = Math.floor(seededRandom(seedCounter++) * 3) + 3; 
+
+                for (let i = 0; i < totalIslands; i++) {
+                    let gap = (seededRandom(seedCounter++) * 2.5) + 2.2; 
+                    currentX += gap;
+
+                    let width = Math.floor(seededRandom(seedCounter++) * 3) + 2; 
+                    let heightOffsetY = Math.floor(seededRandom(seedCounter++) * 3) - 1; 
+                    let finalY = 2 + heightOffsetY;
+
+                    let randType = seededRandom(seedCounter++);
+                    let isFake = (randType > 0.70); // 30% de suelo trampa que se cae
+                    let isMoving = (randType > 0.40 && randType <= 0.70); 
+                    let hasCeiling = (randType <= 0.20); 
+
+                    createBlock(currentX, finalY, width, 4, isFake, false, isMoving);
+
+                    if (seededRandom(seedCounter++) > 0.4) {
+                        let spikeFly = (seededRandom(seedCounter++) > 0.5); 
+                        createSpike(currentX - (gap / 2), 0.5, gap - 0.2, 1, spikeFly);
+                    }
+
+                    if (hasCeiling) {
+                        createBlock(currentX + (width/2) - 1, finalY + 5, 2, 1, false, true);
+                    }
+
+                    currentX += width;
+                }
+
+                currentX += 3;
+                createBlock(currentX, 2, 6, 4, false);
+                doorMesh.position.set(currentX + 3, 2.8, 0);
+            }
+
+            player.x = 2; player.y = 4;
+            player.vx = 0; player.vy = 0;
+            camera.position.x = player.x + 3;
+        }
+
+        function createBlock(x, y, w, h, isFake, isCeilingTrap = false, isMovingHoriz = false) {
+            const geo = new THREE.BoxGeometry(w, h, 1);
+            const mat = isMovingHoriz ? movingWallMat : wallMat;
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x + w/2, y - h/2, 0);
+            scene.add(mesh);
+            platforms.push({ 
+                mesh, x, y, w, h, isFake, isCeilingTrap, isMovingHoriz,
+                initialY: y, initialX: x, falling: false, dir: 1, range: (w > 3 ? 1 : 2)
+            });
+        }
+
+        function createSpike(x, y, w, h, flyUp) {
+            const geo = new THREE.BoxGeometry(w, h, 1);
+            const mesh = new THREE.Mesh(geo, spikeMat);
+            mesh.position.set(x, y, 0);
+            scene.add(mesh);
+            spikes.push({ mesh, initialY: y, flyUp, triggered: false });
+        }
+
+        // 4. CONTROLES
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key.toLowerCase()] = true;
+            if (e.key === ' ' && isGameOver) {
+                isGameOver = false;
+                document.getElementById('gameover-screen').style.display = 'none';
+                buildLevel(currentLevel); 
+            }
+        });
+        window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+        // 5. LÓGICA REESCRITA
+        function update() {
+            if (isGameOver) return;
+
+            player.vx = 0;
+            if (keys['a'] || keys['arrowleft']) player.vx = -speed;
+            if (keys['d'] || keys['arrowright']) player.vx = speed;
+
+            if ((keys['w'] || keys['arrowup'] || keys[' ']) && player.grounded) {
+                player.vy = jumpForce;
+                player.grounded = false;
+            }
+
+            player.vy += gravity;
+
+            let nextX = player.x + player.vx;
+            let nextY = player.y + player.vy;
+            player.grounded = false;
+
+            // --- TRAMPAS ACTUALIZADAS ANTES DE CALCULAR EL SUELO ---
+            platforms.forEach(p => {
+                if (p.isFake && p.falling) {
+                    p.mesh.position.y -= 0.15; // Cae la malla
+                    p.y -= 0.15;              // ¡CRÍTICO: Cae también el suelo físico matemático!
+                }
+                if (p.isCeilingTrap) {
+                    if (player.x > p.x - 1 && player.x < p.x + p.w + 1) p.falling = true;
+                    if (p.falling && p.mesh.position.y > 1.5) {
+                        p.mesh.position.y -= 0.2;
+                        p.y -= 0.2;
+                    }
+                }
+                if (p.isMovingHoriz) {
+                    if (p.mesh.position.x > p.initialX + p.w/2 + p.range) p.dir = -1;
+                    if (p.mesh.position.x < p.initialX + p.w/2 - p.range) p.dir = 1;
+                    p.mesh.position.x += 0.05 * p.dir;
+                    p.x += 0.05 * p.dir; // Mueve la colisión física de lado
+                }
+            });
+
+            // COMPROBAR COLISIÓN CON LAS NUEVAS COORDENADAS DINÁMICAS
+            platforms.forEach(p => {
+                if (nextX + player.w/2 > p.x && nextX - player.w/2 < p.x + p.w) {
+                    // Pisar bloque
+                    if (player.y - player.h/2 >= p.y - 0.15 && nextY - player.h/2 <= p.y) {
+                        nextY = p.y + player.h/2;
+                        player.vy = 0;
+                        player.grounded = true;
+                        
+                        if (p.isFake) p.falling = true; // Activa la caída si pisas
+                        if (p.isMovingHoriz) nextX += 0.05 * p.dir; // Te arrastra
+                    }
+                    // Chocar abajo de un techo asesino
+                    if (p.isCeilingTrap && player.y + player.h/2 <= p.y - p.h && nextY + player.h/2 >= p.y - p.h) {
+                        isGameOver = true;
+                        document.getElementById('gameover-screen').style.display = 'flex';
+                    }
+                }
+            });
+
+            player.x = nextX;
+            player.y = nextY;
+            player.mesh.position.set(player.x, player.y, 0);
+
+            // Trampa de Pinchos
+            spikes.forEach(s => {
+                if (s.flyUp) {
+                    if (player.x > s.mesh.position.x - 3 && player.x < s.mesh.position.x + 3 && player.y > 1) {
+                        s.triggered = true;
+                    }
+                    if (s.triggered && s.mesh.position.y < 3.2) {
+                        s.mesh.position.y += 0.16; 
+                    }
+                }
+                let dist = player.mesh.position.distanceTo(s.mesh.position);
+                if (dist < (player.w/2 + 0.45)) {
+                    isGameOver = true;
+                    document.getElementById('gameover-screen').style.display = 'flex';
+                }
+            });
+
+            // Caída al vacío definitivo
+            if (player.y < -5) {
+                isGameOver = true;
+                document.getElementById('gameover-screen').style.display = 'flex';
+            }
+
+            // Cruzar la Meta
+            let distToDoor = player.mesh.position.distanceTo(doorMesh.position);
+            if (distToDoor < 0.85) {
+                currentLevel++;
+                if (currentLevel > maxLevels) {
+                    isGameOver = true;
+                    document.getElementById('victory-screen').style.display = 'flex';
+                } else {
+                    buildLevel(currentLevel); 
+                }
+            }
+
+            camera.position.x = THREE.MathUtils.lerp(camera.position.x, player.x + 3, 0.06);
+            camera.lookAt(camera.position.x, 3, 0);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        buildLevel(currentLevel);
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
